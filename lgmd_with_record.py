@@ -1,6 +1,6 @@
 # LGMD openMV4 plus
 
-import sensor, image, time, tf
+import sensor, image, time, tf, mjpeg
 import ulab
 from ulab import numpy as np
 
@@ -103,6 +103,11 @@ edge_01_r = (1,1,1,0,0,0,-1,-1,-1)
 edge_10_l = (-1,0,1,-1,0,1,-1,0,1)
 edge_10_r = (1,0,-1,1,0,-1,1,0,-1)
 
+# 视频录制
+m = mjpeg.Mjpeg("FW_image_record_300s_VGA.mjpeg")
+m_2 = mjpeg.Mjpeg("moment_img.mjpeg")
+m_3 = mjpeg.Mjpeg("lgmd_img.mjpeg")
+
 # 串口通信设置
 # openmv4plus RAM Layout
 # 256KB .DATA/.BSS/Heap/Stack
@@ -110,37 +115,38 @@ edge_10_r = (1,0,-1,1,0,-1,1,0,-1)
 # 256 KB DMA Buffers
 # 目前在QSIF下只能同时存在9幅图片
 
-while(True):
-    clock.tick()                    # 更新 FPS 时钟.
-    img_curr = sensor.snapshot()
-    img_01_l = img_curr.copy().morph(1, edge_01_l, mul=0.15)
-    img_01_r = img_curr.copy().morph(1, edge_01_r, mul=0.15)
-    img_01 = img_01_l.add(img_01_r)
-    del img_01_l, img_01_r
-    img_10_l = img_curr.copy().morph(1, edge_10_l, mul=0.15)
-    img_10_r = img_curr.copy().morph(1, edge_10_r, mul=0.15)
-    img_10 = img_10_l.add(img_10_r)
+for i in range(200):
+    clock.tick()                        # 更新 FPS 时钟.
+    img_curr = sensor.snapshot()        # 获取图像
+    m.add_frame(img_curr, quality=100)  # 存储mjpeg文件
+
+    img_01_l = img_curr.copy().morph(1, edge_01_l, mul=0.15)  # 得到左边边界
+    img_01_r = img_curr.copy().morph(1, edge_01_r, mul=0.15)  # 得到右边边界
+    img_01 = img_01_l.add(img_01_r)  # 得到垂直边界
+    del img_01_l, img_01_r  # 删除图像，得到更多内存
+    img_10_l = img_curr.copy().morph(1, edge_10_l, mul=0.15)  # 得到上边界
+    img_10_r = img_curr.copy().morph(1, edge_10_r, mul=0.15)  # 得到下边界
+    img_10 = img_10_l.add(img_10_r)  # 得到水平边界
     del img_10_l, img_10_r
-    img_edge = img_10.add(img_01)
+    img_edge = img_10.add(img_01)  # 相加得到最终边界
     img_00 = img_curr.copy().mean(1)  # 均值滤波
-    img_moment = img_00.div(img_edge, invert=True) # edge/img_00
+    img_moment = img_00.div(img_edge, invert=True) # edge/img_00  得到moment图像
     del img_edge, img_00
+
     # 删除不用的图像 节约内存
-
-
     # 计算image moment能在QSIF下跑到36fps
     # img_curr.replace(img_moment)
 
     # 计算lgmd输出 23fps
+    m_2.add_frame(img_moment, quality=100)
     lgmd.update(img_moment)
-    # img_curr.replace(lgmd.s_layer)
-
-
+    img_curr.replace(lgmd.s_layer)
+    m_3.add_frame(lgmd.s_layer, quality=100)
     # print(clock.fps())
 
     # print(img_edge.get_pixel(0, 0), img_00.get_pixel(0, 0), img_moment.get_pixel(0, 0))
 
-    '''
+
     lgmd_feature = lgmd.mean_value_list
     state_feature = [127, 127, 127]
     feature_all = lgmd_feature + state_feature
@@ -161,6 +167,9 @@ while(True):
     # time.sleep_ms(100)
 
     print('feature_all: ', feature_all, 'roll_cmd: ', roll_cmd, 'FPS: ', clock.fps())
-    '''
+
 
 print('finish')
+m.close(clock.fps())
+m_2.close(clock.fps())
+m_3.close(clock.fps())
