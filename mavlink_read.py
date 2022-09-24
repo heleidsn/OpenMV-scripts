@@ -14,9 +14,11 @@ roll_cmd = 0.0
 
 while(True):
     data = uart.read()
+    '''
     if data is not None:
         print(data)
     '''
+
     if data is not None:
         LEN = int.from_bytes(data[1:2], "big")
         SEQ = int.from_bytes(data[2:3], "big")
@@ -24,15 +26,20 @@ while(True):
         CID = int.from_bytes(data[4:5], "big")
         MID = int.from_bytes(data[5:6], "big")
         PAYLOAD = data[6:LEN+6]
-        if MID == 30:
+        if MID == 32:
+            # check payload lenght. Only unpack correct massages.
+            if len(PAYLOAD)==28:  # 长度28，包含一个uint32(4)和6个float（4）
+                x = struct.unpack('f', PAYLOAD[4:8])[0]
+                y = struct.unpack('f', PAYLOAD[8:12])[0]
+                z = struct.unpack('f', PAYLOAD[12:16])[0]
+            else:
+                x = None
+                y = None
+                z = None
 
-            roll_rad = struct.unpack('f', PAYLOAD[4:8])[0]
+            # print('1')
 
+            print("x:", x, 'y:', y, 'z:', z, 'time: ', time.ticks_ms() - now)
 
-            roll_cmd += 0.01
-            output_str = "R%f" % roll_cmd
-            uart.write(output_str)
-
-            print('roll: ', roll_rad * 57.3, 'time: ', time.ticks_ms() - now, 'sent: ', output_str)
             now = time.ticks_ms()
-    '''
+
