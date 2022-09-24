@@ -1,10 +1,22 @@
 # LGMD openMV4 plus
 
-import sensor, image, time, tf, mjpeg, struct
+import sensor, image, time, tf, mjpeg, struct, math
 from pyb import Pin, Timer, LED, RTC, ExtInt
 import ulab
 from ulab import numpy as np
 from pyb import UART
+
+'''
+输入：
+    LGMD图像信息（5）
+    当前位置
+输出：
+    滚转角度指令（1）
+
+注意：
+    1. 中间会使用目标位置和当前位置来确定
+    2. 刚开始使用moment image进行判断，但是会记录lgmd的数据
+'''
 
 class LGMD():
     def __init__(self):
@@ -91,9 +103,13 @@ class LGMD():
 
 # ----------------------------串口设置-------------------------
 uart = UART(3, 921600)
+# 需要更新的状态量： x, y, z, yaw -pi to pi
+pose_and_yaw = [0, 0, 0, 0]
+goal_pose = [160, 40]
+
+
 
 packet_sequence = 0
-
 MAV_system_id = 1
 MAV_component_id = 0x54
 MAVLINK_MSG_ID = 254  # DEBUG ( #254 )
@@ -112,7 +128,7 @@ def checksum(data, extra): # https://github.com/mavlink/c_library_v1/blob/master
     output = ((output >> 8) ^ (tmp << 8) ^ (tmp << 3) ^ (tmp >> 4)) & 0xFFFF
     return output
 
-def send_distance_sensor_packet(roll_cmd):
+def send_debug_value(roll_cmd):
     global packet_sequence
     temp = struct.pack("<lfb",
                        0,  # time_boot_ms uint32_t
@@ -137,7 +153,86 @@ def send_distance_sensor_packet(roll_cmd):
     packet_sequence += 1
     uart.write(temp)
     time.sleep_ms(10)
-    # print(temp)
+
+def get_roll_test(uart):
+    data = uart.read()
+    if data is not None:
+        LEN = int.from_bytes(data[1:2], "big")
+        SEQ = int.from_bytes(data[2:3], "big")
+        SID = int.from_bytes(data[3:4], "big")
+        CID = int.from_bytes(data[4:5], "big")
+        MID = int.from_bytes(data[5:6], "big")
+        PAYLOAD = data[6:LEN+6]
+        if MID == 30:
+            # check payload lenght. Only unpack correct massages.
+            if len(PAYLOAD)==28:
+                roll_rad = struct.unpack('f', PAYLOAD[4:8])[0]
+            else:
+                roll_rad = 0.00
+
+    return roll_rad
+
+def get_local_position(uart):
+    local_pose = [None, None, None]
+    data = uart.read()
+    if data is not None:
+        LEN = int.from_bytes(data[1:2], "big")
+        SEQ = int.from_bytes(data[2:3], "big")
+        SID = int.from_bytes(data[3:4], "big")
+        CID = int.from_bytes(data[4:5], "big")
+        MID = int.from_bytes(data[5:6], "big")
+        PAYLOAD = data[6:LEN+6]
+        if MID == 32:
+            # check payload lenght. Only unpack correct massages.
+            if len(PAYLOAD)==28:
+                local_pose[0] = struct.unpack('f', PAYLOAD[4:8])[0]
+                local_pose[1] = struct.unpack('f', PAYLOAD[8:12])[0]
+                local_pose[2] = struct.unpack('f', PAYLOAD[12:16])[0]
+
+    return local_pose
+
+def update_state(uart, pose_and_yaw):
+    state = pose_and_yaw
+    data = uart.read()
+    if data is not None:
+        LEN = int.from_bytes(data[1:2], "big")
+        SEQ = int.from_bytes(data[2:3], "big")
+        SID = int.from_bytes(data[3:4], "big")
+        CID = int.from_bytes(data[4:5], "big")
+        MID = int.from_bytes(data[5:6], "big")
+        PAYLOAD = data[6:LEN+6]
+        # update local pose
+        if MID == 32:
+            # check payload lenght. Only unpack correct massages.
+            if len(PAYLOAD)==28:
+                state[0] = struct.unpack('f', PAYLOAD[4:8])[0]
+                state[1] = struct.unpack('f', PAYLOAD[8:12])[0]
+                state[2] = struct.unpack('f', PAYLOAD[12:16])[0]
+        # update yaw
+        if MID == 30:
+            # check payload lenght. Only unpack correct massages.
+            if len(PAYLOAD)==28:
+                state[3] = struct.unpack('f', PAYLOAD[12:16])[0] # yaw -pi to pi
+
+    return state
+
+def get_yaw_error(goal_pose, pose_and_yaw):
+    # 根据目标点位置、当前位置得到相对航迹角
+    # 再根据航迹角和当前yaw得到yaw_err
+    y_err = goal_pose[1] - pose_and_yaw[1]
+    x_err = goal_pose[0] - pose_and_yaw[0]
+    yaw_sp = math.atan2(y_err, x_err)
+
+    yaw_error = yaw_sp - pose_and_yaw[2]
+
+    # print(yaw_sp* 57.3, pose_and_yaw[2] * 57.3, yaw_error * 57.3)
+
+    if yaw_error > math.pi:
+        yaw_error -= 2*math.pi
+    elif yaw_error < -math.pi:
+        yaw_error += 2*math.pi
+
+    return yaw_error
 
 # --------------------------以下代码为主函数--------------------------------
 
@@ -205,7 +300,7 @@ key_node = False  #按键标志位
 
 KEY = Pin('P0', Pin.IN, Pin.PULL_UP)
 
-# 串口通信设置
+
 # openmv4plus RAM Layout
 # 256KB .DATA/.BSS/Heap/Stack
 # 32MB Frame Buffer/Stack
@@ -219,21 +314,11 @@ KEY = Pin('P0', Pin.IN, Pin.PULL_UP)
 while(True):
     clock.tick()                        # 更新 FPS 时钟.
 
-    # 位置信息
-    data = uart.read()
-    if data is not None:
-        LEN = int.from_bytes(data[1:2], "big")
-        SEQ = int.from_bytes(data[2:3], "big")
-        SID = int.from_bytes(data[3:4], "big")
-        CID = int.from_bytes(data[4:5], "big")
-        MID = int.from_bytes(data[5:6], "big")
-        PAYLOAD = data[6:LEN+6]
-        if MID == 30:
-            # check payload lenght. Only unpack correct massages.
-            if len(PAYLOAD)==28:
-                roll_rad = struct.unpack('f', PAYLOAD[4:8])[0]
-            else:
-                roll_rad = 0.00
+    # 更新位置信息
+    pose_and_yaw = update_state(uart, pose_and_yaw)
+
+    # 更新yaw_error
+    yaw_error = get_yaw_error(goal_pose, pose_and_yaw)
 
     # 图像处理
     img_curr = sensor.snapshot()        # 获取图像
@@ -268,7 +353,7 @@ while(True):
         m_3.add_frame(lgmd.s_layer, quality=100)
 
     lgmd_feature = lgmd.mean_value_list
-    state_feature = [0]
+    state_feature = [yaw_error]
     feature_all = lgmd_feature + state_feature
 
     input = np.array(feature_all).reshape((6, 1))
@@ -296,11 +381,12 @@ while(True):
     # Control-2：使用线性控制器控制
     roll_cmd = control_out * 0.5235 * 57.3  # 转换成角度，最大30度
 
-    send_distance_sensor_packet(float(roll_cmd))
+    send_debug_value(float(roll_cmd))
 
     # time.sleep_ms(100)
 
     print('input: ', feature_all, 'roll_cmd: ', roll_cmd, 'c_out', control_out, 'FPS: ', clock.fps())
+    # print(pose_and_yaw, 'FPS: ', clock.fps())
 
 
 print('finish')
