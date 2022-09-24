@@ -5,7 +5,7 @@ import sensor, image, time, struct
 
 from pyb import UART
 
-uart = UART(3, 115200)
+uart = UART(3, 921600)
 
 
 now = time.ticks_ms()
@@ -14,6 +14,9 @@ roll_cmd = 0.0
 
 while(True):
     data = uart.read()
+    if data is not None:
+        print(data)
+    '''
     if data is not None:
         LEN = int.from_bytes(data[1:2], "big")
         SEQ = int.from_bytes(data[2:3], "big")
@@ -32,3 +35,4 @@ while(True):
 
             print('roll: ', roll_rad * 57.3, 'time: ', time.ticks_ms() - now, 'sent: ', output_str)
             now = time.ticks_ms()
+    '''

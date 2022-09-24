@@ -54,6 +54,7 @@ def send_distance_sensor_packet(roll_cmd):
                        checksum(temp, MAVLINK_MESSAGE_CRCS[MAVLINK_MSG_ID]))
     packet_sequence += 1
     uart.write(temp)
+    time.sleep_ms(10)
     # print(temp)
 
 # ---------------------------main function------------------------------------
