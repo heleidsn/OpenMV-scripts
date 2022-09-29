@@ -233,9 +233,9 @@ def get_yaw_error(goal_pose, pose_and_yaw):
     x_err = goal_pose[0] - pose_and_yaw[0]
     yaw_sp = math.atan2(y_err, x_err)
 
-    yaw_error = yaw_sp - pose_and_yaw[2]
+    yaw_error = yaw_sp - pose_and_yaw[3]
 
-    # print(yaw_sp* 57.3, pose_and_yaw[2] * 57.3, yaw_error * 57.3)
+    # print('yaw_sp: ', yaw_sp* 57.3, 'yaw: ', pose_and_yaw[3] * 57.3, 'yaw_err: ', yaw_error * 57.3)
 
     if yaw_error > math.pi:
         yaw_error -= 2*math.pi
@@ -254,7 +254,7 @@ if flag_is_flapping_wing:
     sensor.set_vflip(True)
     sensor.set_hmirror(True)
 
-# 基本设置
+# 相机设置
 sensor.set_pixformat(sensor.GRAYSCALE)  # 设置像素格式为彩色 RGB565 (或灰色GRAYSCALE)
 sensor.set_framesize(sensor.QQVGA)       # 设置帧大小为 QVGA (320x240) QCIF(176x144) QSIF(176*120) QQVGA(160*120)
 sensor.skip_frames(time = 200)         # 等待设置生效.
@@ -440,8 +440,8 @@ while(True):
     # Control-2：使用线性控制器控制
     roll_cmd = control_out * 0.5235 * 57.3  # 转换成角度，最大30度
 
-    # send_debug_value(float(roll_cmd))
-    send_debug_value(float(pose_and_yaw[3]))
+    send_debug_value(float(roll_cmd))
+    # send_debug_value(float(pose_and_yaw[3]))
 
     fps = clock.fps()
 
@@ -466,7 +466,7 @@ while(True):
         flag_record_save = False
         print('video saved')
 
-    print('input: ', feature_all, 'roll_cmd: ', roll_cmd, 'c_out', control_out, 'FPS: ', fps)
+    print('input: ', feature_all, 'roll_cmd: ', roll_cmd, 'yaw_error', yaw_error, 'FPS: ', fps, ' Free: ' + str(gc.mem_free()))
 
 
 print('finish')
