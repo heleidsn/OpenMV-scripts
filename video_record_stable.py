@@ -53,29 +53,8 @@ def send_debug_value(roll_cmd):
     uart.write(temp)
     time.sleep_ms(10)
 
-def get_attitude(uart):
-    state = [0, 0, 0]
-    data = uart.read()
-    if data is not None:
-        LEN = int.from_bytes(data[1:2], "big")
-        SEQ = int.from_bytes(data[2:3], "big")
-        SID = int.from_bytes(data[3:4], "big")
-        CID = int.from_bytes(data[4:5], "big")
-        MID = int.from_bytes(data[5:6], "big")
-        # print(MID)
-        PAYLOAD = data[6:LEN+6]
-        # update angle
-        if MID == 30:
-            # check payload lenght. Only unpack correct massages.
-            if len(PAYLOAD)==28:
-                state[0] = struct.unpack('f', PAYLOAD[4:8])[0]
-                state[1] = struct.unpack('f', PAYLOAD[8:12])[0]
-                state[2] = struct.unpack('f', PAYLOAD[12:16])[0]
-
-    return state
-
-def get_attitude_force(uart):
-
+def get_attitude_force():
+    global uart
     state = [0, 0, 0]
     done = False
 
@@ -98,7 +77,9 @@ def get_attitude_force(uart):
 
     return state
 
-def get_rc_force(uart):
+def get_rc_force():
+    global uart
+    global rc_7
 
     msg = 0
     done = False
@@ -113,38 +94,10 @@ def get_rc_force(uart):
             MID = int.from_bytes(data[5:6], "big")
             PAYLOAD = data[6:LEN+6]
             if MID == 65:
-                # check payload lenght. Only unpack correct massages.
-                print(MID)
                 if len(PAYLOAD)==42:
                     chanel = 7
-                    msg = struct.unpack('h', PAYLOAD[4+(chanel*2-2):4+(chanel*2)])[0]
+                    rc_7 = struct.unpack('h', PAYLOAD[4+(chanel*2-2):4+(chanel*2)])[0]
                     done = True
-
-    return msg
-
-def get_rc(uart, rc_7):
-
-    done = False
-
-    data = uart.read()
-
-    if data is not None:
-        LEN = int.from_bytes(data[1:2], "big")
-        SEQ = int.from_bytes(data[2:3], "big")
-        SID = int.from_bytes(data[3:4], "big")
-        CID = int.from_bytes(data[4:5], "big")
-        MID = int.from_bytes(data[5:6], "big")
-        PAYLOAD = data[6:LEN+6]
-        if MID == 65:
-            # check payload lenght. Only unpack correct massages.
-            print(MID)
-            if len(PAYLOAD)==42:
-                chanel = 7
-                rc_7 = struct.unpack('h', PAYLOAD[4+(chanel*2-2):4+(chanel*2)])[0]
-                done = True
-
-    return rc_7
-
 
 # -----------------------------Main Loop--------------------------
 
@@ -164,8 +117,7 @@ sensor.set_hmirror(True)
 sensor.set_framesize(sensor.QVGA) # or sensor.QQVGA (or others)
 #设置图像像素大小
 
-sensor.skip_frames(time = 2000) # 让新的设置生效
-
+sensor.skip_frames(time = 200) # 让新的设置生效
 
 #时间初始化，用于给图片命名
 rtc=RTC()
@@ -182,83 +134,67 @@ blue_led  = LED(3)                     # 蓝色指示灯
 red_led = LED(1)
 key_node = False  #按键标志位
 
-video_folder = 'video_lgmd'
+# get image size
+img_curr = sensor.snapshot()
+img_size = [img_curr.height(), img_curr.width()]  # 480 640
+img_fov_deg = [55.6, 70.8]
+
+# img_stable_h = 150  # 得到角度  300在480中对应34.75度
+img_stable_fov_h_deg = 30
+pitch_offset_deg = 10
+img_stable_h = int(img_size[0] * img_stable_fov_h_deg / img_fov_deg[0])
+print('img_stable_h: ', img_stable_h)
+
+video_folder = 'video_stable'
 m = mjpeg.Mjpeg(video_folder + '/original_{}_{}_{}.mjpeg'.format(hour, minute, second))
-m_2 = mjpeg.Mjpeg(video_folder + '/stable_{}_{}_{}.mjpeg'.format(hour, minute, second), width=320, height=150)
+m_2 = mjpeg.Mjpeg(video_folder + '/stable_{}_{}_{}.mjpeg'.format(hour, minute, second), width=img_size[1], height=img_stable_h)
 
 
-uart = UART(3, 921600)
+uart = UART(3, 3000000)
 
 clock = time.clock() # 跟踪FPS帧率
 
 flag_record_image = False
 flag_record_save = False
 
+now = time.ticks_ms()
+
+step = 1 # used for update RC input
 while(True):
     clock.tick()                        # 更新 FPS 时钟.
+    step = step + 1
 
-    # 获取原始图像
+    # -----------------获取原始图像-------------------------------------
     img_curr = sensor.snapshot()        # 获取图像 目前是480 * 640
-    m.add_frame(img_curr, quality=100)  # 存储mjpeg文件
 
-    img_size = [img_curr.height(), img_curr.width()]  # 480 640
-    img_fov_deg = [55.6, 70.8]
+    if flag_record_image:
+        m.add_frame(img_curr, quality=100)  # 存储mjpeg文件
 
-    img_stable_h = 150 # 得到角度  300在480中对应34.75度
-    img_stable_fov_h = img_fov_deg[0] * img_stable_h / img_size[0]
+    # ------------------更新数据 pitch---------------------------------
+    attitude = get_attitude_force()  # 单独force更新能到80HZ 带上获取图像46Hz 带上
+    if step >= 50:
+        get_rc_force()
+        step = 1
 
-    pitch = 0
-    x_diff = int((img_size[0]/2) * math.tan(pitch) / math.tan(math.radians(img_fov_deg[0] / 2)))
-
-    # roi = x,y,w,h 需要计算一个x x=0对应最大的fov 55.6度
-    y = int((img_size[0] - img_stable_h) / 2)
-    print('x', y)
-    img_curr.to_grayscale(roi=(0, y, 640, img_stable_h))
-
-    m_2.add_frame(img_curr, quality=100)
-
-    # 设置需要的FoV：30 ,所以第一步是确定垂直方向像素的数量
-
-    # sensor.set_windowing((640, 80))
-
-    # img_curr = sensor.snapshot()
-
-    # 更新数据
-    # msg = get_attitude_force(uart)  # 单独force更新能到80HZ 带上获取图像46Hz 带上
-
-
-    print(img_size)
-    # HFOV = 70.8°, VFOV = 55.6° 假设保留其中30度
-
-
-    # print(img_curr[0:10, 19:29])
-
-    #img_small = img_curr[0:200, 0:200]
-
-    #img_curr.replace(img_small)
-
-
-    # print(img_size)
-
-    rc_7 = get_rc(uart, rc_7)
-    # rc_7 = get_rc_force(uart)
-
+    # -----------------check if change record mode-------------------
     if rc_7 == 0:
+        # waiting for RC
         red_led.on()
         blue_led.off()
     elif rc_7 == 1094:
+        # get rc
         flag_record_image = False
         flag_video_saved = False
         blue_led.off()
         red_led.toggle()
     elif rc_7 == 1514:
         if rc_7_last == 1094:
-            # flag_record_image = True
+            flag_record_image = True
             red_led.off()
             blue_led.on()
     elif rc_7 == 1934:
         if rc_7_last == 1514:
-            # flag_record_save = True
+            flag_record_save = True
             red_led.off()
             blue_led.off()
     else:
@@ -266,10 +202,26 @@ while(True):
 
     rc_7_last = rc_7
 
+    # --------------stable image according to pitch angle----------------
+    pitch = attitude[1] - math.radians(pitch_offset_deg)
+    y_diff = int((img_size[0]/2) * math.tan(pitch) / math.tan(math.radians(img_fov_deg[0] / 2)))
+
+    # roi = x,y,w,h 需要计算一个x x=0对应最大的fov 55.6度  current y_center 55
+    y_center = int((img_size[0] - img_stable_h) / 2) + y_diff
+
+    if y_center < 0:
+        y_center = 0
+    elif y_center > int((img_size[0] - img_stable_h)):
+        y_center = int((img_size[0] - img_stable_h))
+
+
+    img_curr.to_grayscale(roi=(0, y_center, img_size[1], img_stable_h))
+
     if flag_record_image:
-        m.add_frame(img_curr, quality=100)  # 存储mjpeg文件
+        m_2.add_frame(img_curr, quality=100)
         blue_led.toggle()
 
+    # ----------------check if save videos-----------------------------
     if flag_record_save:
         m.close(fps)
         m_2.close(fps)
@@ -282,14 +234,17 @@ while(True):
         second = '%02d' % dateTime[6]
 
         m = mjpeg.Mjpeg(video_folder + '/original_{}_{}_{}.mjpeg'.format(hour, minute, second))
-        m_2 = mjpeg.Mjpeg(video_folder + '/stable_{}_{}_{}.mjpeg'.format(hour, minute, second))
+        m_2 = mjpeg.Mjpeg(video_folder + '/stable_{}_{}_{}.mjpeg'.format(hour, minute, second), width=img_size[1], height=img_stable_h)
 
         flag_record_image = False
         flag_record_save = False
         print('video saved')
 
     fps = clock.fps()
-    print('data: ', rc_7, 'FPS: ', fps, ' Free: ' + str(gc.mem_free()))
+    print('data: ', rc_7, 'FPS: ', fps, 'time: ', time.ticks_ms() - now,
+          ' Free: ' + str(gc.mem_free()), 'step', step, 'pitch_deg', math.degrees(pitch),
+          'y_diff', y_diff, 'y_center', y_center)
+    now = time.ticks_ms()
 
 
 print('finish')

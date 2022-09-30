@@ -1,24 +1,24 @@
 # Untitled - By: helei - Fri May 20 2022
 # openmv serial read
 
-import sensor, image, time, struct
-
+import sensor, image, time, mjpeg, pyb, gc, struct, math
+from pyb import Pin, Timer, LED, RTC, ExtInt
 from pyb import UART
 
-uart = UART(3, 921600)
+uart = UART(3, 3000000)
 
 
 now = time.ticks_ms()
 
 roll_cmd = 0.0
 
+clock = time.clock() # 跟踪FPS帧率
+
 while(True):
+    clock.tick()
     data = uart.read()
 
-    # print(data)
-
     if data is not None:
-        clock.tick()
         LEN = int.from_bytes(data[1:2], "big")
         SEQ = int.from_bytes(data[2:3], "big")
         SID = int.from_bytes(data[3:4], "big")
@@ -27,11 +27,6 @@ while(True):
         PAYLOAD = data[6:LEN+6]
 
         if MID == 30:
-            # print(len(PAYLOAD))
-            if len(PAYLOAD)==28:
-                chanel = 7
-                rc_7 = struct.unpack('h', PAYLOAD[4+(chanel*2-2):4+(chanel*2)])[0]
-                print(rc_7, 'time: ', time.ticks_ms() - now)
-                now = time.ticks_ms()
-                # print(len(PAYLOAD))
-
+            # if len(PAYLOAD)==42:
+            print('time: ', time.ticks_ms() - now)
+            now = time.ticks_ms()
