@@ -181,21 +181,23 @@ while(True):
         red_led.on()
         blue_led.off()
     elif rc_7 == 1094:
-        # get rc
+        # get rc wait for recording
         flag_record_image = False
         flag_video_saved = False
         blue_led.off()
         red_led.toggle()
     elif rc_7 == 1514:
         if rc_7_last == 1094:
+            # start recording
             flag_record_image = True
             red_led.off()
-            blue_led.on()
+            # blue_led.on()
     elif rc_7 == 1934:
         if rc_7_last == 1514:
+            # end recording and save data
             flag_record_save = True
             red_led.off()
-            blue_led.off()
+            blue_led.on()
     else:
         red_led.toggle()
 
