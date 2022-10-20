@@ -248,6 +248,8 @@ def get_yaw_error(goal_pose, pose_and_yaw):
 
 sensor.reset()                          #复位和初始化摄像头，执行sensor.run(0)停止。
 
+print('0 - Used: ' + str(gc.mem_alloc()) + ' Free: ' + str(gc.mem_free()))
+
 # 设置信鸽上使用方向
 flag_is_flapping_wing = True
 if flag_is_flapping_wing:
@@ -337,6 +339,8 @@ KEY = Pin('P0', Pin.IN, Pin.PULL_UP)
 #  主循环
 ##############################################
 
+print('1 - Used: ' + str(gc.mem_alloc()) + ' Free: ' + str(gc.mem_free()))
+
 while(True):
     clock.tick()                        # 更新 FPS 时钟.
     # print('2 - Used: ' + str(gc.mem_alloc()) + ' Free: ' + str(gc.mem_free()))
@@ -373,14 +377,19 @@ while(True):
     if flag_record_image:
         m.add_frame(img_curr, quality=100)  # 存储mjpeg文件
         blue_led.toggle()
-
     # print('3 - Used: ' + str(gc.mem_alloc()) + ' Free: ' + str(gc.mem_free()))
+
+    print('before moment: ', gc.mem_free())
     img_01_l = img_curr.copy().morph(1, edge_01_l, mul=0.15)  # 得到左边边界
     img_01_r = img_curr.copy().morph(1, edge_01_r, mul=0.15)  # 得到右边边界
     img_01 = img_01_l.add(img_01_r)  # 得到垂直边界
     # print('4 - Used: ' + str(gc.mem_alloc()) + ' Free: ' + str(gc.mem_free()))
     del img_01_l, img_01_r  # 删除图像，得到更多内存
+    # gc.collect()
+    # gc.enable()
     # print('5 - Used: ' + str(gc.mem_alloc()) + ' Free: ' + str(gc.mem_free()))
+    # gc.mem_alloc()
+    print(gc.mem_free())
     img_10_l = img_curr.copy().morph(1, edge_10_l, mul=0.15)  # 得到上边界
     img_10_r = img_curr.copy().morph(1, edge_10_r, mul=0.15)  # 得到下边界
     img_10 = img_10_l.add(img_10_r)  # 得到水平边界
@@ -389,7 +398,7 @@ while(True):
     img_00 = img_curr.copy().mean(1)  # 均值滤波
     img_moment = img_00.div(img_edge, invert=True) # edge/img_00  得到moment图像
     del img_edge, img_00, img_01, img_10
-    # gc.collect()
+
 
     # 只保留image_moment
 
@@ -401,6 +410,7 @@ while(True):
     if flag_record_image:
         m_2.add_frame(img_moment, quality=100)
 
+    print('before update: ', gc.mem_free())
     lgmd.update(img_moment)
 
     if not moment_mode:

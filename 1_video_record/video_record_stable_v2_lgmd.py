@@ -1,9 +1,15 @@
 # Video_stable_v2
 # 使用rotation_correction对视频进行稳定
 
+# TODO: get current pose
+# TODO: use memory
+
+# FPS:14 vs 12
+
 import sensor, image, time, mjpeg, pyb, gc, struct, math
 from pyb import Pin, Timer, LED, RTC, ExtInt
 from pyb import UART
+from ulab import numpy as np
 
 
 class LGMD():
@@ -70,11 +76,18 @@ class LGMD():
                 self.p_prev = self.p_layer.copy()
             else:
                 # 首次进入，需要初始化
+                # print('start init lgmd')
+                print('before start init lgmd: ', gc.mem_free())
                 self.img_g_prev = self.img_g_curr.copy()  # 上一帧图像
+                print('1-', gc.mem_free())
                 self.p_layer = self.img_g_curr.difference(self.img_g_prev)
+                print('2-', gc.mem_free())
                 self.p_prev = self.p_layer.copy()
+                print('3-', gc.mem_free())
                 self.i_layer = self.p_layer.copy()
+                print('4-', gc.mem_free())
                 self.s_layer = self.p_layer.copy()
+                print('5-', gc.mem_free())
 
                 # self.s_layer_mean_pool = self.s_layer.mean_pooled(34, 120)
                 # print(self.s_layer_mean_pool)
@@ -154,6 +167,32 @@ def get_attitude_force():
 
     return attitude_rad
 
+def get_pose_force():
+    global uart
+    global pose_and_yaw
+    # print('start_get_pose_force')
+
+    done = False
+
+    while not done:
+        data = uart.read()
+        if data is not None:
+            LEN = int.from_bytes(data[1:2], "big")
+            SEQ = int.from_bytes(data[2:3], "big")
+            SID = int.from_bytes(data[3:4], "big")
+            CID = int.from_bytes(data[4:5], "big")
+            MID = int.from_bytes(data[5:6], "big")
+            PAYLOAD = data[6:LEN+6]
+            if MID == 32:
+                # check payload lenght. Only unpack correct massages.
+                if len(PAYLOAD)==28:
+                    pose_and_yaw[0] = struct.unpack('f', PAYLOAD[4:8])[0]
+                    pose_and_yaw[1] = struct.unpack('f', PAYLOAD[8:12])[0]
+                    pose_and_yaw[2] = struct.unpack('f', PAYLOAD[12:16])[0]
+                    done = True
+
+    return pose_and_yaw
+
 def get_rc_force():
     global uart
     global rc_in
@@ -177,17 +216,37 @@ def get_rc_force():
                     rc_in[1] = struct.unpack('h', PAYLOAD[4+(chanel[1]*2-2):4+(chanel[1]*2)])[0]
                     done = True
 
+def get_yaw_error(goal_pose, pose_and_yaw):
+    # 根据目标点位置、当前位置得到相对航迹角
+    # 再根据航迹角和当前yaw得到yaw_err
+    y_err = goal_pose[1] - pose_and_yaw[1]
+    x_err = goal_pose[0] - pose_and_yaw[0]
+    yaw_sp = math.atan2(y_err, x_err)
+
+    yaw_error = yaw_sp - pose_and_yaw[3]
+
+    # print('yaw_sp: ', yaw_sp* 57.3, 'yaw: ', pose_and_yaw[3] * 57.3, 'yaw_err: ', yaw_error * 57.3)
+
+    if yaw_error > math.pi:
+        yaw_error -= 2*math.pi
+    elif yaw_error < -math.pi:
+        yaw_error += 2*math.pi
+
+    return yaw_error
+
 ############################################################################
 #                          Program starts here
 ############################################################################
 sensor.reset()
 sensor.set_pixformat(sensor.GRAYSCALE)
-sensor.set_framesize(sensor.QVGA) # or sensor.QQVGA (or others)
+sensor.set_framesize(sensor.QQVGA) # or sensor.QQVGA (or others)
 sensor.set_vflip(True)
 sensor.set_hmirror(True)
 sensor.skip_frames(time = 200) # 让新的设置生效
 
-video_folder = 'video_record_stable_1012'
+video_folder = 'video_record_stable_1020'
+goal_pose = [160, 40]
+pose_and_yaw = [0, 0, 0, 0]
 
 rtc=RTC()
 blue_led  = LED(3)
@@ -209,21 +268,20 @@ X_OFFSET = 0
 Y_OFFSET = 0
 y_rotation_counter = 0
 z_rotation_counter = 0
-ZOOM_AMOUNT = 1.3
+ZOOM_AMOUNT = 1.35
 FOV_WINDOW = 65
 
 pitch_offset_deg = 0  # set for pitch is not zero
 
 
 img_curr = sensor.snapshot()
-img_size = [img_curr.height(), img_curr.width()]  # 480 640
+img_size = [img_curr.height(), img_curr.width()]  # QQVGA 120, 160
 img_fov_deg = [65.8, 81.8]
 
 img_stable_fov_h_deg = 40
 pitch_offset_deg = 10
 img_stable_h = int(img_size[0] * img_stable_fov_h_deg / img_fov_deg[0])
-print('img_stable_h: ', img_stable_h)
-
+print('img_stable_h: ', img_stable_h)      # only 72 height left
 
 # -----------------------------LGMD----------------------------------------------
 # -------------------------------------------------------------------------------
@@ -256,6 +314,8 @@ edge_01_r = (1,1,1,0,0,0,-1,-1,-1)
 edge_10_l = (-1,0,1,-1,0,1,-1,0,1)
 edge_10_r = (1,0,-1,1,0,-1,1,0,-1)
 
+print('start: ', gc.mem_free())
+
 # ---------------------------------------Main Loop----------------------------------------------
 while(True):
     clock.tick()                        # 更新 FPS 时钟.
@@ -264,10 +324,15 @@ while(True):
     # ------------------更新数据 pitch---------------------------------
     attitude_rad = get_attitude_force()  # 单独force更新能到80HZ 带上获取图像46Hz 带上
 
+    pose_and_yaw = get_pose_force()
+    pose_and_yaw[3] = attitude_rad[2]
+    # print(pose_and_yaw)
+    # attitude_rad = [0, 0, 0]
+
     # -----------------check if change record mode-------------------
     if step >= 50:
         # 每50步强制更新一下RC，将主要时间让给姿态更新
-        get_rc_force()
+        # get_rc_force()
         step = 1
 
     if rc_in[0] == 0:
@@ -346,6 +411,9 @@ while(True):
         m.add_frame(img_curr, quality=100)  # 存储mjpeg文件
         blue_led.toggle()
 
+    img_size = [img_curr.height(), img_curr.width()]  # QQVGA 72, 160
+    # print(img_size)
+    # print('before moment: ', gc.mem_free())
     # -------------------LGMD with stable-------------------------------------
     # print('3 - Used: ' + str(gc.mem_alloc()) + ' Free: ' + str(gc.mem_free()))
     img_01_l = img_curr.copy().morph(1, edge_01_l, mul=0.15)  # 得到左边边界
@@ -363,10 +431,14 @@ while(True):
     img_moment = img_00.div(img_edge, invert=True) # edge/img_00  得到moment图像
     del img_edge, img_00, img_01, img_10
 
+    # print('before update: ', gc.mem_free())
+    # print('6 - Used: ' + str(gc.mem_alloc()) + ' Free: ' + str(gc.mem_free()))
+
     lgmd.update(img_moment)
 
     # ----------------------get control command------------------------------
 
+    yaw_error = get_yaw_error(goal_pose, pose_and_yaw)
     lgmd_feature = lgmd.mean_value_list
     state_feature = [yaw_error]
     feature_all = lgmd_feature + state_feature
@@ -411,7 +483,8 @@ while(True):
           'roll: %2.2f' % math.degrees(attitude_rad[0]),
           'pitch: %2.2f' % math.degrees(attitude_rad[1]),
           'yaw: %.2f' % math.degrees(attitude_rad[2]),
-          'recording: ', flag_record_image
+          'recording: ', flag_record_image,
+          'pose_and_yaw', pose_and_yaw
           )
     now = time.ticks_ms()
 
