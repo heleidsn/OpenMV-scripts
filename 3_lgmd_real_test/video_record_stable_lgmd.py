@@ -73,7 +73,7 @@ rtc=RTC()
 blue_led  = LED(3)
 red_led = LED(1)
 
-video_folder = 'video_record_stable_1012'
+video_folder = 'video_record_stable_1116'
 
 uart = UART(3, 3000000)
 
@@ -142,7 +142,7 @@ while(True):
             minute = '%02d' % dateTime[5]
             second = '%02d' % dateTime[6]
 
-            video_path = video_folder + '/original_{}_{}_{}.mjpeg'.format(hour, minute, second)
+            video_path = video_folder + '/stable_{}_{}_{}.mjpeg'.format(hour, minute, second)
             if flag_use_roi:
                 m = mjpeg.Mjpeg(video_path, width=img_size[1], height=img_stable_h)
             else:
