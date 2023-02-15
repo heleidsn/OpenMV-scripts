@@ -9,9 +9,100 @@
 
 import sensor, image, time, gc, micropython
 
+
+class LGMD():
+    def __init__(self, moment_mode):
+        self.init_ok = False
+        self.img_g_curr = None  # 当前灰度图像输入
+        self.img_m_curr = None  # 当前moment图像
+        self.img_m_prev = None  # 上一帧moment图像
+
+        self.p_layer = None
+        self.p_prev = None
+        self.i_layer = None
+        self.s_layer = None
+
+        self.wi = (0.125, 0.25, 0.125, 0.25, 0, 0.25, 0.125, 0.25, 0.125)
+        self.w_1 = (1,1,1,1,1,1,1,1,1)
+        self.Ki = 0.35
+
+        self.lgmd_out = 0
+
+        self.moment_mode = moment_mode
+        self.moment_min = 25
+        self.moment_max = 50
+
+    def update(self, img_g):
+        # 输入为moment图像
+        self.img_g_curr = img_g
+
+        if self.moment_mode:
+            # 直接输出moment的分割图像
+            self.movement_mean_pool = self.img_g_curr.mean_pooled(int(self.img_g_curr.width()/5), self.img_g_curr.height())
+            self.mean_value_list = []
+            norm_mean_value = True
+            for i in range(5):
+                mean_value = self.movement_mean_pool.get_pixel(i, 0)
+                if norm_mean_value:
+                    if mean_value > self.moment_max:
+                        mean_value = self.moment_max
+                    elif mean_value < self.moment_min:
+                        mean_value = self.moment_min
+                    self.mean_value_list.append((mean_value - self.moment_min)/(self.moment_max - self.moment_min))
+                else:
+                    self.mean_value_list.append(mean_value)
+        else:
+            if self.init_ok:
+                # get p i s layer output
+                self.p_layer = self.img_g_curr.copy().difference(self.img_g_prev)
+                self.i_layer = self.p_prev.copy().morph(1, self.w_1, mul=1)
+                self.i_layer = self.i_layer.mean(7)
+                self.s_layer = self.p_layer.copy().sub(self.i_layer)
+
+                # self.s_layer_mean_pool = self.s_layer.mean_pooled(34, 120)
+                # print(self.s_layer_mean_pool)
+                self.mean_value_list = []
+                for i in range(5):
+                    # mean_value = self.s_layer_mean_pool.get_pixel(i, 0) - 10
+                    mean_value = 0
+                    if mean_value < 0:
+                        mean_value = 0
+                    self.mean_value_list.append(mean_value)
+                # print(mean_value_list)
+
+                self.img_g_prev = self.img_g_curr.copy()
+                self.p_prev = self.p_layer.copy()
+            else:
+                # 首次进入，需要初始化
+                # print('start init lgmd')
+                print('before start init lgmd: ', gc.mem_free())
+                self.img_g_prev = self.img_g_curr.copy()  # 上一帧图像
+                print('1-', gc.mem_free())
+                self.p_layer = self.img_g_curr.difference(self.img_g_prev)
+                print('2-', gc.mem_free())
+                self.p_prev = self.p_layer.copy()
+                print('3-', gc.mem_free())
+                self.i_layer = self.p_layer.copy()
+                print('4-', gc.mem_free())
+                self.s_layer = self.p_layer.copy()
+                print('5-', gc.mem_free())
+
+                # self.s_layer_mean_pool = self.s_layer.mean_pooled(34, 120)
+                # print(self.s_layer_mean_pool)
+
+                self.mean_value_list = []
+                for i in range(5):
+                    # mean_value = self.s_layer_mean_pool.get_pixel(i, 0)
+                    mean_value = 0
+                    self.mean_value_list.append(mean_value)
+                # print(self.mean_value_list)
+
+                self.lgmd_out = 0
+                self.init_ok = True
+
 sensor.reset()                      # Reset and initialize the sensor.
 sensor.set_pixformat(sensor.GRAYSCALE) # Set pixel format to RGB565 (or GRAYSCALE)
-sensor.set_framesize(sensor.QVGA)   # Set frame size to QVGA (320x240)
+sensor.set_framesize(sensor.QQVGA)   # Set frame size to QVGA (320x240)
 sensor.skip_frames(time = 200)     # Wait for settings take effect.
 clock = time.clock()                # Create a clock object to track the FPS.
 
@@ -20,7 +111,7 @@ sensor.set_auto_gain(False)
 sensor.set_auto_whitebal(False)
 sensor.set_auto_exposure(False, 50000) # 设置曝光时间（us）
 
-sensor.set_windowing((320, 200)) #取中间的640*80区域
+# sensor.set_windowing((320, 200)) #取中间的640*80区域
 
 print(micropython.mem_info())
 
@@ -38,6 +129,9 @@ edge_10_r = (1,0,-1,1,0,-1,1,0,-1)
 
 MUL = 0.15
 COPY_TO_FB = False
+
+moment_mode = False  # 设置使用LGMD还是moment
+lgmd = LGMD(moment_mode)
 
 while(True):
     clock.tick()                    # Update the FPS clock.
@@ -61,8 +155,14 @@ while(True):
     del img_01, img_10
     img_00 = img_curr.copy(copy_to_fb=COPY_TO_FB).mean(1)  # 均值滤波
 
-    img_curr.replace(img_00)
+
     img_moment = img_00.div(img_edge, invert=True) # edge/img_00  得到moment图像
+
+    lgmd.update(img_moment)
+
+    # img_curr.replace(img_moment)
+
+    img_curr.replace(lgmd.s_layer)
 
     del img_edge, img_00
     del img_moment
