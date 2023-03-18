@@ -2,6 +2,7 @@
 # 使用rotation_correction对视频进行稳定
 # 2022-10-12
 # Lei He
+# 2023-01-30 上机测试
 
 import sensor, image, time, mjpeg, pyb, gc, struct, math
 from pyb import Pin, Timer, LED, RTC, ExtInt
