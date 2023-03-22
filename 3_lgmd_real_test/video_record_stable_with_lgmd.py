@@ -6,6 +6,7 @@
 # 2023-03-18 新校区测试 原始openmv损坏 无法检测到相机 更换新的openmv
 # 2023-03-21 能够同时记录稳定前和稳定后的视频 发现可以在不同阶段添加记录即可，不需要增加framebuffer
 # 2023-03-22 搞定兴趣区域，能够实现增稳和非增稳的切换，使用RC8, 调整了录制文件命名规则
+# 2023-03-22 增加LGMD相关内容
 # 发现串口无法通信
 
 import sensor, image, time, mjpeg, pyb, gc, struct, math
@@ -116,6 +117,8 @@ w_crop = 220
 h_crop = 100
 x_crop = int((img_size[1] - w_crop) / 2)
 y_crop = int((img_size[0] - h_crop) / 2)
+
+m_crop_last = img_curr.crop(roi=(x_crop, y_crop, w_crop, h_crop), copy=True)
 
 # 设置镜头FoV
 # img_fov_deg = [65.8, 81.8] # 标准镜头
@@ -257,7 +260,14 @@ while(True):
                                                zoom = ZOOM_AMOUNT,
                                                fov = FOV_WINDOW)
 
-            m_crop = img_curr.crop(roi=(x_crop, y_crop, w_crop, h_crop), copy=True)
+            m_crop = img_curr.crop(roi=(x_crop, y_crop, w_crop, h_crop))
+
+            # 获取moment 或者 lmgd
+
+            # 1 获得lgmd
+            diff = m_crop.difference(m_crop_last)
+            m_crop_last = m_crop.copy(copy_to_fb=True)
+
     else:
         img_curr = sensor.snapshot()        # 获取图像
         if flag_record_image:
