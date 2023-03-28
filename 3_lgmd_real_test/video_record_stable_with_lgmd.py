@@ -7,22 +7,67 @@
 # 2023-03-21 能够同时记录稳定前和稳定后的视频 发现可以在不同阶段添加记录即可，不需要增加framebuffer
 # 2023-03-22 搞定兴趣区域，能够实现增稳和非增稳的切换，使用RC8, 调整了录制文件命名规则
 # 2023-03-22 增加LGMD相关内容
-# 发现串口无法通信
+# 2023-03-28 尝试添加LGMD所有内容 不做LGMD计算的情况下QVGA-210*100 gray输入，15 FPS 决定不做LGMD 直接用moment的图像 实现了图像分割
+# 发现串口无法通信，将线重新做了一遍，可以了
 
 import sensor, image, time, mjpeg, pyb, gc, struct, math
 from pyb import Pin, Timer, LED, RTC, ExtInt
 from pyb import UART
+
+# LGMD相关代码
+def get_moment_image(img_curr):
+    '''
+    输入：灰度图像
+    输出：该图像的moment
+    '''
+    edge_01_l = (-1,-1,-1,0,0,0,1,1,1)
+    edge_01_r = (1,1,1,0,0,0,-1,-1,-1)
+    edge_10_l = (-1,0,1,-1,0,1,-1,0,1)
+    edge_10_r = (1,0,-1,1,0,-1,1,0,-1)
+
+    img_01_l = img_curr.copy().morph(1, edge_01_l, mul=0.15)  # 得到左边边界
+    img_01_r = img_curr.copy().morph(1, edge_01_r, mul=0.15)  # 得到右边边界
+    img_01 = img_01_l.add(img_01_r)  # 得到垂直边界
+    # print('4 - Used: ' + str(gc.mem_alloc()) + ' Free: ' + str(gc.mem_free()))
+    del img_01_l, img_01_r  # 删除图像，得到更多内存
+    # print('5 - Used: ' + str(gc.mem_alloc()) + ' Free: ' + str(gc.mem_free()))
+    img_10_l = img_curr.copy().morph(1, edge_10_l, mul=0.15)  # 得到上边界
+    img_10_r = img_curr.copy().morph(1, edge_10_r, mul=0.15)  # 得到下边界
+    img_10 = img_10_l.add(img_10_r)  # 得到水平边界
+    del img_10_l, img_10_r
+    img_edge = img_10.add(img_01)  # 相加得到最终边界
+    img_00 = img_curr.copy().mean(1)  # 均值滤波
+    img_moment = img_00.div(img_edge, invert=True) # edge/img_00  得到moment图像
+    del img_edge, img_00, img_01, img_10
+
+    return img_moment
+
+def get_split_out(img_moment):
+    '''
+    将图像进行分割，得到输出
+    '''
+    movement_mean_pool = img_moment.mean_pooled(int(img_moment.width()/5),img_moment.height()) # 计算均值
+    mean_value_list = []
+
+    for i in range(5):
+        mean_value = movement_mean_pool.get_pixel(i, 0)
+        mean_value_list.append(mean_value)
+
+    return mean_value_list
 
 # mavlink相关代码
 packet_sequence = 0
 MAV_system_id = 1
 MAV_component_id = 0x54
 
-def get_attitude_force():
+def get_attitude_force(is_sim=False):
     # 强制更新姿态信息
     global uart
     attitude_rad = [0, 0, 0]
     done = False
+
+    if is_sim:
+        done = True
 
     while not done:
         data = uart.read()
@@ -43,13 +88,16 @@ def get_attitude_force():
 
     return attitude_rad
 
-def get_rc_force():
+def get_rc_force(is_sim=False):
     # 强制更新遥控器信息
     global uart
     global rc_in
 
     msg = 0
     done = False
+
+    if is_sim:
+        done = True
 
     while not done:
         data = uart.read()
@@ -84,7 +132,7 @@ red_led = LED(1)
 
 record_index_file = 'record_name.txt'       # 录制文件命名记录
 
-video_folder = 'video_record_stable_03_21'  # 设置video记录地址
+video_folder = 'video_record_stable_03_28_lgmd'  # 设置video记录地址
 
 uart = UART(3, 3000000)
 
@@ -113,7 +161,7 @@ img_curr = sensor.snapshot()
 img_size = [img_curr.height(), img_curr.width()]  # 480 640
 
 # 设置裁切大小
-w_crop = 220
+w_crop = 210
 h_crop = 100
 x_crop = int((img_size[1] - w_crop) / 2)
 y_crop = int((img_size[0] - h_crop) / 2)
@@ -134,18 +182,13 @@ while(True):
     clock.tick()                        # 更新 FPS 时钟.
     step = step + 1
 
-    # 串口测试
-    # data = uart.read()
-    # print(data)
-
-
     # ------------------更新姿态和遥控信息---------------------------------
     # print('wait for attitude')
-    attitude_rad = get_attitude_force()  # 单独force更新能到80HZ 带上获取图像46Hz 带上
+    attitude_rad = get_attitude_force(is_sim=True)  # 单独force更新能到80HZ 带上获取图像46Hz 带上
 
     if step >= 10:
-        # 每50步强制更新一下RC，将主要时间让给姿态更新
-        get_rc_force()
+        # 每10步或者50步强制更新一下RC，将主要时间让给姿态更新
+        get_rc_force(is_sim=True)
         step = 1
 
     # ------------------------判断是否进行录制---------------------------
@@ -203,6 +246,9 @@ while(True):
         flag_use_stable = False
 
     rc_in_last = rc_in.copy()
+
+    # -------------------------离线调试-------------------------------------
+    flag_use_stable = True
 
     # --------------------------稳定图像-------------------------------------
     pitch = math.degrees(attitude_rad[1])
@@ -264,10 +310,25 @@ while(True):
 
             # 获取moment 或者 lmgd
 
-            # 1 获得lgmd
-            diff = m_crop.difference(m_crop_last)
-            m_crop_last = m_crop.copy(copy_to_fb=True)
+            # 0328 实现原始图像的difference 暂时保留
+            # m_crop_copy = m_crop.copy()
+            # diff = m_crop.difference(m_crop_last)
+            # m_crop_last = m_crop_copy
 
+            # 0328 尝试计算image moment
+            img_moment = get_moment_image(m_crop)  # 感觉最大可以处理300*100的图像
+
+            # use difference
+            # img_moment_copy = img_moment.copy()
+            # diff = img_moment.difference(m_crop_last)
+            # m_crop_last = img_moment_copy
+
+            # 尝试显示img_moment
+            m_crop.replace(img_moment)
+
+            # 图像分割
+            split_out = get_split_out(img_moment)
+            print(split_out)
     else:
         img_curr = sensor.snapshot()        # 获取图像
         if flag_record_image:
