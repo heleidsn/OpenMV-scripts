@@ -417,10 +417,9 @@ while(True):
         control_out = 1
     elif control_out < -1:
         control_out = -1
-    control_out = 1
     roll_cmd_deg = control_out * math.radians(40) * 57.3  # 转换成角度，最大30度 这个0.5235是啥没有搞清楚
 
-    send_debug_value(float(roll_cmd_deg))
+    send_debug_value(float(math.radians(roll_cmd_deg)))
     # ----------------------------保存录像-----------------------------
     if flag_record_save:
         m_origin.close(fps)
