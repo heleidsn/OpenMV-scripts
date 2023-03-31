@@ -24,18 +24,18 @@ from pyb import UART
 from ulab import numpy as np
 
 # 计算yaw error
-def get_yaw_error(goal_pose, pose_and_yaw):
+def get_yaw_error(goal_pose, pose_xyz, yaw):
     '''
     根据目标点位置、当前位置得到相对航迹角
     再根据航迹角和当前yaw得到yaw_err
     '''
-    y_err = goal_pose[1] - pose_and_yaw[1]
-    x_err = goal_pose[0] - pose_and_yaw[0]
+    y_err = goal_pose[1] - pose_xyz[1]
+    x_err = goal_pose[0] - pose_xyz[0]
     yaw_sp = math.atan2(y_err, x_err)
 
-    yaw_error = yaw_sp - pose_and_yaw[3]
+    yaw_error = yaw_sp - yaw
 
-    # print('yaw_sp: ', yaw_sp* 57.3, 'yaw: ', pose_and_yaw[3] * 57.3, 'yaw_err: ', yaw_error * 57.3)
+    # print('yaw_sp: ', yaw_sp* 57.3, 'yaw: ', yaw * 57.3, 'yaw_err: ', yaw_error * 57.3)
 
     if yaw_error > math.pi:
         yaw_error -= 2*math.pi
@@ -160,6 +160,35 @@ def get_attitude_force(is_sim=False):
 
     return attitude_rad
 
+def get_position_force(is_sim=False):
+    # 强制更新位置信息
+    global uart
+    pose_xyz = [0, 0, 0]
+    done = False
+
+    if is_sim:
+        done = True
+
+    while not done:
+        data = uart.read()
+        # print(data)
+        if data is not None:
+            LEN = int.from_bytes(data[1:2], "big")
+            SEQ = int.from_bytes(data[2:3], "big")
+            SID = int.from_bytes(data[3:4], "big")
+            CID = int.from_bytes(data[4:5], "big")
+            MID = int.from_bytes(data[5:6], "big")
+            PAYLOAD = data[6:LEN+6]
+            if MID == 32:
+                # check payload lenght. Only unpack correct massages.
+                if len(PAYLOAD)==28:
+                    pose_xyz[0] = struct.unpack('f', PAYLOAD[4:8])[0]
+                    pose_xyz[1] = struct.unpack('f', PAYLOAD[8:12])[0]
+                    pose_xyz[2] = struct.unpack('f', PAYLOAD[12:16])[0]
+                    done = True
+
+    return pose_xyz
+
 def get_rc_force(is_sim=False):
     # 强制更新遥控器信息
     global uart
@@ -206,11 +235,12 @@ record_index_file = 'record_name.txt'       # 录制文件命名记录
 
 video_folder = 'video_record_stable_03_28_lgmd'  # 设置video记录地址
 
-control_weight = np.array([1, 2, 3, -2, -1, 3])  # 用于控制的权重，前五位为LGMD输出，后一位为yaw偏角
+control_weight = np.array([1, 2, 3, -2, -1, 1])  # 用于控制的权重，前五位为LGMD输出，后一位为yaw偏角
 roll_cmd_max = 40
-goal_pose = [160, 40]
+goal_pose = [90, -20]
+pose_xyz = [0, 0, 0]
 
-uart = UART(3, 3000000)
+uart = UART(3, 921600)
 
 flag_record_image = False
 flag_record_save = False
@@ -262,7 +292,14 @@ while(True):
     step = step + 1
 
     # ------------------更新姿态和遥控信息---------------------------------
+    # print('wait for attitude')
     attitude_rad = get_attitude_force(is_sim=flag_is_debug)  # 单独force更新能到80HZ 带上获取图像46Hz 带上
+
+    # print('wait for position')
+
+    pose_xyz = get_position_force(is_sim=flag_is_debug)
+    # print(pose_xyz)
+    # pose_xyz = [0, 0, 0]
 
     if step >= 10:
         # 每10步或者50步强制更新一下RC，将主要时间让给姿态更新
@@ -391,22 +428,24 @@ while(True):
         split_out = np.array([0, 0, 0, 0, 0])
 
     # ----------------------------计算yaw error-----------------------
-    # yaw_error = get_yaw_error(goal_pose, pose_and_yaw)
-    yaw_error = 0
+    # print('cal yaw_error')
+    yaw_error = get_yaw_error(goal_pose, pose_xyz, attitude_rad[2])
 
     # ----------------------------计算控制指令--------------------------
     lgmd_feature = split_out
-    print(lgmd_feature)
+    # print(lgmd_feature)
 
     # 需要对lgmd_feature进行归一化，从10-40 归一化到 0-1
-    lgmd_min = 20
-    lgmd_max = 60
+    lgmd_min = 10
+    lgmd_max = 30
     for i in range(len(lgmd_feature)):
         lgmd_feature[i] = (lgmd_feature[i] - lgmd_min) / (lgmd_max - lgmd_min)
         if lgmd_feature[i] > 1:
             lgmd_feature[i] = 1
         if lgmd_feature[i] < 0:
             lgmd_feature[i] = 0
+
+        # lgmd_feature[i] = 0 # for debug
 
     state_feature = [yaw_error]
     feature_all = lgmd_feature + state_feature
@@ -431,16 +470,20 @@ while(True):
 
     # 串口输出
     fps = clock.fps()
+
     print('RC: ', rc_in, 'FPS: %.2f' % fps,
           # 'time: ', time.ticks_ms() - now,
           # ' Free: ' + str(gc.mem_free()), 'step', step,
-          'roll: %2.2f' % math.degrees(attitude_rad[0]),
-          'roll_cmd: %2.2f' % roll_cmd_deg,
-          'pitch: %2.2f' % math.degrees(attitude_rad[1]),
-          'yaw: %.2f' % math.degrees(attitude_rad[2]),
+          'r: %2.2f' % math.degrees(attitude_rad[0]),
+          'r_cmd: %2.2f' % roll_cmd_deg,
+          'p: %2.2f' % math.degrees(attitude_rad[1]),
+          'y: %.2f' % math.degrees(attitude_rad[2]),
+          'y-e', yaw_error,
+          # 'pose', pose_xyz,
           # 'recording: ', flag_record_image,
           'f: ', feature_all
           )
+
     # print('input: ', feature_all, 'roll_cmd: ', roll_cmd, 'yaw_error', yaw_error, 'FPS: ', fps, ' Free: ' + str(gc.mem_free()))
     now = time.ticks_ms()
 
